@@ -1,0 +1,16 @@
+{
+  "app.title": "NEEBLES Proxy Server",
+  "app.subtitle": "Salida a Internet mediante Tailscale",
+  "surface.open": "Abrir NEEBLES Proxy Server",
+  "server.allowlist": "Lista blanca",
+  "server.add": "Agregar equipo",
+  "server.remove": "Quitar equipo",
+  "server.allowed": "Autorizado",
+  "server.denied": "No autorizado",
+  "server.status": "Estado del servidor",
+  "server.exit_node": "Nodo de salida",
+  "server.tailnet": "Tailnet Stark",
+  "server.ip": "IP Tailscale",
+  "server.no_tailscale": "Tailscale no está disponible",
+  "server.saved": "Configuración guardada"
+}

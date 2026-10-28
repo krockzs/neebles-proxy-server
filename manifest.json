@@ -1,0 +1,29 @@
+{
+  "schema": 4,
+  "name": "neebles-proxy-server",
+  "version": "0.1.0",
+  "entrypoint": "runtime/neebles-proxy-server",
+  "lifecycle": "lifecycle.json",
+  "surfaces": "surfaces.json",
+  "contracts": [],
+  "settings": "settings/default.json",
+  "uninstall": {
+    "schema": 1,
+    "hardcoded": {},
+    "main": "governor",
+    "extras": [],
+    "cleanup": [
+      {
+        "id": "local-settings",
+        "type": "settings",
+        "ref": "manifest.settings",
+        "policy": "user-choice"
+      }
+    ],
+    "failure": {
+      "unknown_process_owner": "abort",
+      "resource_still_running": "abort",
+      "cleanup_error": "abort"
+    }
+  }
+}
