@@ -23,3 +23,13 @@ add_test(NAME neebles-proxy-server-policy_fixture COMMAND neebles-proxy-server-p
     --policy ${CMAKE_SOURCE_DIR}/contracts/allowlist.example.json
     --status-fixture ${CMAKE_SOURCE_DIR}/tests/tailscale.status.fixture.json)
 set_tests_properties(neebles-proxy-server-policy_fixture PROPERTIES PASS_REGULAR_EXPRESSION "not_configured")
+
+# Stage 005: read-only exit-node controller plan. No privileged network operations.
+qt_add_executable(neebles-proxy-server-controller src/controller.cpp)
+target_link_libraries(neebles-proxy-server-controller PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME neebles-proxy-server-controller_help COMMAND neebles-proxy-server-controller --help)
+set_tests_properties(neebles-proxy-server-controller_help PROPERTIES PASS_REGULAR_EXPRESSION "read-only")
+add_test(NAME neebles-proxy-server-controller_fixture COMMAND neebles-proxy-server-controller
+    --policy ${CMAKE_SOURCE_DIR}/contracts/allowlist.example.json
+    --status-fixture ${CMAKE_SOURCE_DIR}/tests/tailscale.status.fixture.json)
+set_tests_properties(neebles-proxy-server-controller_fixture PROPERTIES PASS_REGULAR_EXPRESSION "tailnet_acl_enforcement_not_verified")
