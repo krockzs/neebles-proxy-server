@@ -5,7 +5,14 @@
   "entrypoint": "runtime/neebles-proxy-server",
   "lifecycle": "lifecycle.json",
   "surfaces": "surfaces.json",
-  "contracts": [],
+  "contracts": [
+    {
+      "type": "commands",
+      "file": "contracts/commands.json",
+      "schema": 1,
+      "enabled": true
+    }
+  ],
   "settings": "settings/default.json",
   "uninstall": {
     "schema": 1,
