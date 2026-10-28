@@ -8,6 +8,8 @@
 #include <QSet>
 #include <QHostAddress>
 #include <QTextStream>
+#include <QStringList>
+#include <unistd.h>
 
 static bool load(const QString &path,QJsonObject &out){
     QFile f(path); if(!f.open(QIODevice::ReadOnly)) return false;
@@ -70,7 +72,34 @@ int main(int argc,char **argv){
     cli.addHelpOption();
     QCommandLineOption p("policy","Path to allowlist policy","file");
     QCommandLineOption f("status-fixture","Path to Tailscale status fixture for tests","file");
-    cli.addOption(p);cli.addOption(f);cli.process(app);
+    QCommandLineOption disable("deactivate", "Revoke Exit Node advertisement on the dedicated server (requires root).");
+    QCommandLineOption activate("activate", "Request Exit Node activation; fail closed until ACL enforcement is verified.");
+    cli.addOption(p);cli.addOption(f);cli.addOption(disable);cli.addOption(activate);cli.process(app);
+    if(cli.isSet(disable) && cli.isSet(activate)) { QTextStream(stderr)<<"Conflicting operations\n";return 2; }
+    if(cli.isSet(disable)) {
+        if(cli.isSet(f)) { QTextStream(stderr)<<"Fixture prohibited for state-changing operation\n";return 2; }
+        QJsonObject current;
+        if(!tailscale(current)) { QTextStream(stderr)<<"Tailscale unavailable\n";return 3; }
+        const QString tailnet=current.value("CurrentTailnet").toObject().value("Name").toString();
+        const QStringList ips=current.value("Self").toObject().value("TailscaleIPs").toVariant().toStringList();
+        if(tailnet!="olate.pablo@gmail.com" || !ips.contains("100.71.3.52")) {
+            QTextStream(stderr)<<"Refusing operation: unexpected tailnet or dedicated server\n"; return 4;
+        }
+        if(geteuid()!=0) { QTextStream(stderr)<<"Root required; invoke via authorized Boss lifecycle\n";return 5; }
+        QProcess action;
+        action.start("/usr/bin/tailscale", {"set", "--advertise-exit-node=false"});
+        if(!action.waitForStarted(2000) || !action.waitForFinished(10000) ||
+           action.exitStatus()!=QProcess::NormalExit || action.exitCode()!=0) {
+            if(action.state()!=QProcess::NotRunning){action.kill();action.waitForFinished(500);}
+            QTextStream(stderr)<<"Disable failed: "<<QString::fromUtf8(action.readAllStandardError())<<"\n";return 6;
+        }
+        QTextStream(stdout)<<"EXIT_NODE_ADVERTISEMENT_DISABLED\n";
+        return 0;
+    }
+    if(cli.isSet(activate)) {
+        QTextStream(stderr)<<"ACTIVATION_BLOCKED: server-side ACL enforcement and tailnet grants not verified\n";
+        return 7;
+    }
     if(!cli.isSet(p)){QTextStream(stderr)<<"--policy required\n";return 2;}
     QJsonObject policy,status;
     if(!load(cli.value(p),policy)){QTextStream(stderr)<<"Invalid policy JSON\n";return 2;}

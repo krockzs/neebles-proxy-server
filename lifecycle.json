@@ -10,11 +10,43 @@
   "require": {},
   "objects": {},
   "transitions": {
-    "install": {"operations": {}},
-    "update": {"operations": {}},
-    "uninstall": {"operations": {}},
-    "enable": {"operations": {}},
-    "disable": {"operations": {}},
-    "open": {"operations": {}}
+    "install": {
+      "operations": {
+        "activate-health-service": {
+          "artillery": "boss.user_service",
+          "objective": "install",
+          "munition": {
+            "resource": "proxy-health-daemon"
+          },
+          "tactics": {},
+          "intelligence": {}
+        }
+      }
+    },
+    "update": {
+      "operations": {}
+    },
+    "uninstall": {
+      "operations": {}
+    },
+    "enable": {
+      "operations": {}
+    },
+    "disable": {
+      "operations": {}
+    },
+    "open": {
+      "operations": {
+        "launch-ui": {
+          "artillery": "boss.workspace_execution",
+          "objective": "construction.step",
+          "munition": {
+            "step": "open-ui"
+          },
+          "tactics": {},
+          "intelligence": {}
+        }
+      }
+    }
   }
 }

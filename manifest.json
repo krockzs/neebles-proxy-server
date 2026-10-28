@@ -16,9 +16,26 @@
   "settings": "settings/default.json",
   "uninstall": {
     "schema": 1,
-    "hardcoded": {},
+    "hardcoded": {
+      "health_service": "neebles-neebles-proxy-server-health.service"
+    },
     "main": "governor",
-    "extras": [],
+    "extras": [
+      {
+        "id": "proxy-health-daemon",
+        "type": "service",
+        "provider": "systemd-user",
+        "name": "$hardcoded.health_service",
+        "exec_start": "/opt/neebles/modules/neebles-proxy-server/runtime/neebles-proxy-server-health --policy /opt/neebles/modules/neebles-proxy-server/settings/allowlist.json --port 18879",
+        "required": false,
+        "stop": {
+          "disable": true,
+          "timeout_ms": 5000
+        },
+        "verify": "inactive",
+        "remove": true
+      }
+    ],
     "cleanup": [
       {
         "id": "local-settings",
