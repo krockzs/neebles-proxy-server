@@ -43,3 +43,11 @@ add_test(NAME neebles-proxy-server-health_fixture COMMAND neebles-proxy-server-h
     --check --policy ${CMAKE_SOURCE_DIR}/contracts/allowlist.example.json
     --status-fixture ${CMAKE_SOURCE_DIR}/tests/tailscale.health.fixture.json)
 set_tests_properties(neebles-proxy-server-health_fixture PROPERTIES PASS_REGULAR_EXPRESSION "exit_ready")
+
+# Stage 007: runtime health HTTP integration test on the active Stark tailnet.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME neebles-proxy-server-health_integration
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/health_integration.py
+    --binary $<TARGET_FILE:neebles-proxy-server-health>
+    --policy ${CMAKE_SOURCE_DIR}/contracts/allowlist.example.json)
+set_tests_properties(neebles-proxy-server-health_integration PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 20)
