@@ -1,0 +1,24 @@
+[Unit]
+Description=NEEBLES Proxy Server - Tailscale health (read-only)
+Wants=network-online.target tailscaled.service
+After=network-online.target tailscaled.service
+ConditionPathExists=/usr/bin/tailscale
+
+[Service]
+Type=simple
+User=server
+Group=server
+ExecStart=/opt/neebles-proxy-server/bin/neebles-proxy-server-health --policy /opt/neebles-proxy-server/etc/allowlist.json --port 8787
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
