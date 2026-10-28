@@ -33,3 +33,13 @@ add_test(NAME neebles-proxy-server-controller_fixture COMMAND neebles-proxy-serv
     --policy ${CMAKE_SOURCE_DIR}/contracts/allowlist.example.json
     --status-fixture ${CMAKE_SOURCE_DIR}/tests/tailscale.status.fixture.json)
 set_tests_properties(neebles-proxy-server-controller_fixture PROPERTIES PASS_REGULAR_EXPRESSION "tailnet_acl_enforcement_not_verified")
+
+# Stage 006: Tailscale-bound health listener. It never enables forwarding or advertises Exit Node.
+qt_add_executable(neebles-proxy-server-health src/health.cpp)
+target_link_libraries(neebles-proxy-server-health PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME neebles-proxy-server-health_help COMMAND neebles-proxy-server-health --help)
+set_tests_properties(neebles-proxy-server-health_help PROPERTIES PASS_REGULAR_EXPRESSION "HTTP health service")
+add_test(NAME neebles-proxy-server-health_fixture COMMAND neebles-proxy-server-health
+    --check --policy ${CMAKE_SOURCE_DIR}/contracts/allowlist.example.json
+    --status-fixture ${CMAKE_SOURCE_DIR}/tests/tailscale.health.fixture.json)
+set_tests_properties(neebles-proxy-server-health_fixture PROPERTIES PASS_REGULAR_EXPRESSION "exit_ready")
