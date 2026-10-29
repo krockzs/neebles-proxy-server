@@ -1,6 +1,6 @@
 [Unit]
 Description=NEEBLES Proxy Server health service
-After=basic.target tailscaled.service
+After=basic.target
 ConditionPathExists=/opt/neebles/modules/neebles-proxy-server/manifest.json
 
 [Service]
