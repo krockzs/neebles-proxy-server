@@ -1,0 +1,12 @@
+{
+  "schema": "1",
+  "module": "neebles-proxy-server",
+  "operations": {
+    "deactivate": {
+      "executable": "/usr/lib/neebles/module-operations/neebles-proxy-server-platform",
+      "argv": [
+        "--deactivate"
+      ]
+    }
+  }
+}

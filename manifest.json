@@ -1,7 +1,7 @@
 {
   "schema": 4,
   "name": "neebles-proxy-server",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "entrypoint": "runtime/neebles-proxy-server",
   "lifecycle": "lifecycle.json",
   "surfaces": "surfaces.json",

@@ -20,11 +20,30 @@
           },
           "tactics": {},
           "intelligence": {}
+        },
+        "ensure-secrets-vault": {
+          "artillery": "boss.workspace_execution",
+          "objective": "construction.step",
+          "munition": {
+            "step": "install-vault"
+          },
+          "tactics": {},
+          "intelligence": {}
         }
       }
     },
     "update": {
-      "operations": {}
+      "operations": {
+        "ensure-secrets-vault": {
+          "artillery": "boss.workspace_execution",
+          "objective": "construction.step",
+          "munition": {
+            "step": "install-vault"
+          },
+          "tactics": {},
+          "intelligence": {}
+        }
+      }
     },
     "uninstall": {
       "operations": {}
@@ -42,6 +61,15 @@
           "objective": "construction.step",
           "munition": {
             "step": "open-ui"
+          },
+          "tactics": {},
+          "intelligence": {}
+        },
+        "inspect-status": {
+          "artillery": "boss.workspace_execution",
+          "objective": "construction.step",
+          "munition": {
+            "step": "inspect-status"
           },
           "tactics": {},
           "intelligence": {}

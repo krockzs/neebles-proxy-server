@@ -58,7 +58,7 @@ static QJsonObject inspect() {
     output.insert("tailnet", tailnetName);
     output.insert("host", self.value("HostName").toString());
     output.insert("tailscale_ipv4", v4);
-    output.insert("exit_node_advertised", self.value("ExitNode").toBool(false));
+    output.insert("exit_node_advertised", self.value("ExitNodeOption").toBool(false));
     // Tailnet identity is intentionally NOT inferred from an IP prefix.
     output.insert("stark_candidate", tailnetName == "olate.pablo@gmail.com");
     output.insert("ready_for_advertising", false);

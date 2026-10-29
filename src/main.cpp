@@ -1,3 +1,4 @@
+#include "vault_install.h"
 #include <QApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -150,6 +151,31 @@ private:
 };
 
 int main(int argc, char **argv) {
+    // Lifecycle install/update: no QApplication and no GUI session required.
+    if (argc == 3 &&
+        QString::fromLocal8Bit(argv[1]) == QStringLiteral("--intent") &&
+        QString::fromLocal8Bit(argv[2]) == QStringLiteral("install-vault")) {
+        QString error;
+        if (!ensureProxyVault(&error)) {
+            fprintf(stderr, "PROXY_VAULT_INSTALL_FAILED: %s\n",
+                    qPrintable(error));
+            return 1;
+        }
+        puts("PROXY_VAULT_READY");
+        return 0;
+    }
+    // Governor/CUSTOM V2 canonical Open intent; reject unrelated intents.
+    if (argc == 3 &&
+        QString::fromLocal8Bit(argv[1]) == QStringLiteral("--intent") &&
+        QString::fromLocal8Bit(argv[2]) == QStringLiteral("open")) {
+        argc = 1;  // QApplication and Qt parser see no extra arguments.
+    }
+    // F21_REQUIRE_CANONICAL_INTENT: never interpret an unsupported lifecycle intent as GUI flags.
+    if (argc >= 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--intent") &&
+        !(argc == 3 && QString::fromLocal8Bit(argv[2]) == QStringLiteral("open"))) {
+        fprintf(stderr, "PROXY_INVALID_INTENT\n");
+        return 2;
+    }
     QApplication app(argc, argv);
     QCommandLineParser cli;
     cli.setApplicationDescription("NEEBLES Proxy Server — Qt administration of allowlist (Exit Node disabled)");

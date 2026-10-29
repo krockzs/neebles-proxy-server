@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.21)
-project(neebles_proxy_server VERSION 0.1.0 LANGUAGES CXX)
+project(neebles_proxy_server VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 COMPONENTS Core Widgets Network REQUIRED)
 qt_standard_project_setup()
-qt_add_executable(neebles-proxy-server src/main.cpp)
+qt_add_executable(neebles-proxy-server src/main.cpp src/vault_install.cpp)
 target_link_libraries(neebles-proxy-server PRIVATE Qt6::Core Qt6::Widgets Qt6::Network)
 qt_add_executable(neebles-proxy-server-inspect src/inspect.cpp)
 target_link_libraries(neebles-proxy-server-inspect PRIVATE Qt6::Core Qt6::Network)
@@ -51,3 +51,50 @@ add_test(NAME neebles-proxy-server-health_integration
     --binary $<TARGET_FILE:neebles-proxy-server-health>
     --policy ${CMAKE_SOURCE_DIR}/contracts/allowlist.example.json)
 set_tests_properties(neebles-proxy-server-health_integration PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 20)
+
+# F04: dedicated native ELF for Boss platform operations.
+# No automatic privileged execution during install or tests.
+qt_add_executable(neebles-proxy-server-platform src/platform.cpp)
+target_link_libraries(neebles-proxy-server-platform
+    PRIVATE Qt6::Core Qt6::Network)
+
+add_test(
+    NAME neebles-proxy-server-platform_help
+    COMMAND neebles-proxy-server-platform --help
+)
+set_tests_properties(neebles-proxy-server-platform_help
+    PROPERTIES PASS_REGULAR_EXPRESSION
+    "privileged native operation")
+
+# F05: non-mutating security contract and non-root rejection.
+add_test(
+    NAME neebles-proxy-server-platform_security
+    COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_SOURCE_DIR}/tests/verify_platform_candidate.py
+        $<TARGET_FILE:neebles-proxy-server-platform>
+        ${CMAKE_SOURCE_DIR}/contracts/platform-operations.candidate.json
+)
+set_tests_properties(
+    neebles-proxy-server-platform_security
+    PROPERTIES
+        SKIP_RETURN_CODE 77
+        TIMEOUT 15
+)
+
+# F17: protocol tests against a local mock, never real Secrets.
+add_test(
+    NAME neebles-proxy-server-vault_install_ipc
+    COMMAND ${Python3_EXECUTABLE}
+        -B ${CMAKE_SOURCE_DIR}/tests/test_vault_install_ipc.py
+        --binary $<TARGET_FILE:neebles-proxy-server>
+)
+set_tests_properties(
+    neebles-proxy-server-vault_install_ipc
+    PROPERTIES TIMEOUT 150
+)
+
+# F22: native privilege-free preflight never changes Tailscale state.
+add_test(NAME neebles-proxy-server-platform_preflight
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/tests/test_platform_preflight.py
+    $<TARGET_FILE:neebles-proxy-server-platform>)
+set_tests_properties(neebles-proxy-server-platform_preflight PROPERTIES TIMEOUT 15)
