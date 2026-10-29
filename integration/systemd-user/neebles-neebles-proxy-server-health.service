@@ -1,0 +1,15 @@
+[Unit]
+Description=NEEBLES Proxy Server health service
+After=basic.target
+ConditionPathExists=/opt/neebles/modules/neebles-proxy-server/manifest.json
+
+[Service]
+Type=simple
+ExecStart=/opt/neebles/modules/neebles-proxy-server/runtime/neebles-proxy-server-health --policy /opt/neebles/modules/neebles-proxy-server/settings/allowlist.json --port 18879
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
