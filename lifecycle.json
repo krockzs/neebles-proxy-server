@@ -33,17 +33,7 @@
       }
     },
     "update": {
-      "operations": {
-        "ensure-secrets-vault": {
-          "artillery": "boss.workspace_execution",
-          "objective": "construction.step",
-          "munition": {
-            "step": "install-vault"
-          },
-          "tactics": {},
-          "intelligence": {}
-        }
-      }
+      "operations": {}
     },
     "uninstall": {
       "operations": {}
