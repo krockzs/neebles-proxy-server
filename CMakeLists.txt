@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(neebles_proxy_server VERSION 1.0.3 LANGUAGES CXX)
+project(neebles_proxy_server VERSION 1.0.4 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.8 COMPONENTS Core Widgets Network REQUIRED)
@@ -98,3 +98,8 @@ add_test(NAME neebles-proxy-server-platform_preflight
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/tests/test_platform_preflight.py
     $<TARGET_FILE:neebles-proxy-server-platform>)
 set_tests_properties(neebles-proxy-server-platform_preflight PROPERTIES TIMEOUT 15)
+
+# 1.0.4: native Unix IPC, policy persistence and isolated restart gate.
+add_test(NAME neebles-proxy-server-ipc_bridge
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/tests/test_ipc_bridge.py)
+set_tests_properties(neebles-proxy-server-ipc_bridge PROPERTIES TIMEOUT 35)

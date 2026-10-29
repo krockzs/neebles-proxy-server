@@ -1,4 +1,11 @@
 #include <QCoreApplication>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <QFileDevice>
+#include <QJsonValue>
+#include <QLocalSocket>
+#include <QLocalServer>
 #include <QDateTime>
 #include <QTimer>
 #include <QSaveFile>
@@ -8,6 +15,7 @@
 #include <QFile>
 #include <QHostAddress>
 #include <QJsonArray>
+#include <QSet>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
@@ -107,6 +115,115 @@ static void publishUiSnapshot() {
     }
 }
 
+
+static QString persistentPolicyPath() {
+    return QDir::homePath() + "/.config/neebles/proxy-server/allowlist.json";
+}
+static bool validPolicy(const QJsonObject &p) {
+    if (p.value("schema_version").toInt() != 1 ||
+        p.value("tailnet").toString() != QStringLiteral("olate.pablo@gmail.com") ||
+        !p.value("allowed_clients").isArray()) return false;
+    const QJsonArray clients = p.value("allowed_clients").toArray();
+    if (clients.isEmpty() || clients.size() > 128) return false;
+    QSet<QString> unique;
+    for (const auto &client : clients) {
+        if (!client.isString()) return false;
+        const QString value=client.toString();
+        QHostAddress addr;
+        if (!addr.setAddress(value) || addr.protocol()!=QAbstractSocket::IPv4Protocol ||
+            !value.startsWith("100.") || unique.contains(value)) return false;
+        unique.insert(value);
+    }
+    return true;
+}
+static bool savePolicy(const QJsonObject &p) {
+    if (!validPolicy(p)) return false;
+    const QString path=persistentPolicyPath();
+    if (!QDir().mkpath(QFileInfo(path).absolutePath())) return false;
+    QSaveFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) return false;
+    const QByteArray bytes=QJsonDocument(p).toJson(QJsonDocument::Indented);
+    if (f.write(bytes)!=bytes.size()) { f.cancelWriting(); return false; }
+    if (!f.commit()) return false;
+    QFile::setPermissions(path, QFileDevice::ReadOwner|QFileDevice::WriteOwner);
+    return true;
+}
+static bool loadPersistentPolicy(const QString &initial) {
+    const QString path=persistentPolicyPath();
+    QJsonObject policy;
+    // Existing persistent policy always wins. Invalid existing policy fails closed.
+    if (QFile::exists(path)) return readJson(path,policy) && validPolicy(policy);
+    if (!readJson(initial,policy) || !validPolicy(policy)) return false;
+    return savePolicy(policy);
+}
+static QJsonObject localRequest(const QJsonObject &request) {
+    const QString operation=request.value("op").toString();
+    if (operation=="status") {
+        QJsonObject s;
+        const bool got=getStatus(s);
+        const QString ip=got ? serverIp(s) : QString();
+        return QJsonObject{{"ok",true},{"schema_version",1},
+            {"tailnet",got ? s.value("CurrentTailnet").toObject().value("Name").toString() : QString()},
+            {"tailscale_ipv4",ip},
+            {"tailscale_ok",got && s.value("BackendState").toString()=="Running" && !ip.isEmpty()},
+            {"advisory_only",true}};
+    }
+    if (operation=="policy.get") {
+        QJsonObject p;
+        if (!readJson(persistentPolicyPath(),p) || !validPolicy(p))
+            return QJsonObject{{"ok",false},{"error","invalid_policy"}};
+        return QJsonObject{{"ok",true},{"policy",p},{"authorization_enforced",false}};
+    }
+    if (operation=="policy.set") {
+        const QJsonObject p=request.value("policy").toObject();
+        if (!validPolicy(p)) return QJsonObject{{"ok",false},{"error","invalid_policy"}};
+        if (!savePolicy(p)) return QJsonObject{{"ok",false},{"error","write_failed"}};
+        return QJsonObject{{"ok",true},{"authorization_enforced",false}};
+    }
+    return QJsonObject{{"ok",false},{"error","unknown_operation"}};
+}
+static bool startLocalInterface(QLocalServer &server, QCoreApplication &app) {
+    const QString runtime=qEnvironmentVariable("XDG_RUNTIME_DIR");
+    if (runtime.isEmpty() || !runtime.startsWith("/run/user/")) return false;
+    const QString dir=runtime+"/neebles";
+    if (!QDir().mkpath(dir)) return false;
+    QFile::setPermissions(dir,QFileDevice::ReadOwner|QFileDevice::WriteOwner|QFileDevice::ExeOwner);
+    const QString path=dir+"/proxy-server.sock";
+    // A stale socket is removed only if no running server answers on it.
+    QLocalSocket probe;
+    probe.connectToServer(path);
+    if (probe.waitForConnected(200)) return false;
+    if (QFile::exists(path)) QLocalServer::removeServer(path);
+    if (!server.listen(path)) return false;
+    QFile::setPermissions(path,QFileDevice::ReadOwner|QFileDevice::WriteOwner);
+    QObject::connect(&server,&QLocalServer::newConnection,&app,[&server]() {
+        while (server.hasPendingConnections()) {
+            QLocalSocket *client=server.nextPendingConnection();
+            struct ucred credentials{};
+            socklen_t size=sizeof(credentials);
+            const bool authorized=getsockopt(int(client->socketDescriptor()),SOL_SOCKET,SO_PEERCRED,
+                &credentials,&size)==0 && credentials.uid==geteuid();
+            if (!authorized) { client->disconnectFromServer(); client->deleteLater(); continue; }
+            QObject::connect(client,&QLocalSocket::readyRead,client,[client]() {
+                if (client->bytesAvailable()>8192) {client->disconnectFromServer();return;}
+                if (!client->canReadLine()) return;
+                const QByteArray line=client->readLine(8192);
+                QJsonParseError err;
+                auto doc=QJsonDocument::fromJson(line,&err);
+                const QJsonObject answer=(err.error==QJsonParseError::NoError && doc.isObject())
+                    ? localRequest(doc.object())
+                    : QJsonObject{{"ok",false},{"error","invalid_json"}};
+                client->write(QJsonDocument(answer).toJson(QJsonDocument::Compact)+"\n");
+                client->flush();
+                client->disconnectFromServer();
+            });
+            QObject::connect(client,&QLocalSocket::disconnected,client,&QObject::deleteLater);
+        }
+    });
+    QTextStream(stdout)<<"LOCAL_IPC="<<path<<'\n';
+    return true;
+}
+
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
     QCommandLineParser cli;
@@ -116,7 +233,8 @@ int main(int argc, char **argv) {
     QCommandLineOption fixture("status-fixture", "Tailscale status fixture for offline tests", "file");
     QCommandLineOption check("check", "Check configuration and exit without opening a port");
     QCommandLineOption port("port", "TCP port (1024-65535)", "number", "8787");
-    cli.addOption(policy); cli.addOption(fixture); cli.addOption(check); cli.addOption(port);
+    QCommandLineOption ipcOnly("ipc-only", "Run local socket only; no HTTP listener");
+    cli.addOption(policy); cli.addOption(fixture); cli.addOption(check); cli.addOption(port); cli.addOption(ipcOnly);
     cli.process(app);
     QJsonObject p, s;
     if (!cli.isSet(policy) || !readJson(cli.value(policy), p)) { QTextStream(stderr) << "Invalid or missing --policy\n"; return 2; }
@@ -130,6 +248,15 @@ int main(int argc, char **argv) {
             QTextStream(stderr) << "Invalid allowlist address\n"; return 2;
         }
     }
+    if (!cli.isSet(check) && !loadPersistentPolicy(cli.value(policy))) {
+        QTextStream(stderr)<<"Persistent policy unavailable or invalid\n";
+        return 5;
+    }
+    QLocalServer localServer;
+    if (!cli.isSet(check) && !startLocalInterface(localServer,app)) {
+        QTextStream(stderr)<<"Local IPC unavailable\n";
+        return 6;
+    }
     const bool statusOK = cli.isSet(fixture) ? readJson(cli.value(fixture), s) : getStatus(s);
     const QString ip = serverIp(s);
     const bool ok = statusOK && stark(s) && !ip.isEmpty();
@@ -137,7 +264,8 @@ int main(int argc, char **argv) {
         QTextStream(stdout) << QJsonDocument(reply(ok, ip)).toJson(QJsonDocument::Compact) << '\n';
         return ok ? 0 : 3;
     }
-    if (!ok) { QTextStream(stderr) << "Stark Tailscale identity unavailable; listener refused\n"; return 3; }
+    if (cli.isSet(ipcOnly)) return app.exec();
+    if (!ok) { QTextStream(stderr) << "Tailscale not ready for HTTP health; local IPC remains active\n"; return app.exec(); }
     bool parsed = false;
     int number = cli.value(port).toInt(&parsed);
     if (!parsed || number < 1024 || number > 65535) { QTextStream(stderr) << "Invalid port\n"; return 2; }

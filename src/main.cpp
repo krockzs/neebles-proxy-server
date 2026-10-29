@@ -1,5 +1,6 @@
 #include "vault_install.h"
 #include <QApplication>
+#include <QLocalSocket>
 #include <QColor>
 #include <QPainter>
 #include <QCoreApplication>
@@ -105,6 +106,25 @@ static QString neeblesTheme() {
 
 static constexpr auto StarkTailnet = "olate.pablo@gmail.com";
 
+
+static QJsonObject requestLocal(const QJsonObject &request) {
+    const QString runtime=qEnvironmentVariable("XDG_RUNTIME_DIR");
+    QLocalSocket socket;
+    socket.connectToServer(runtime+"/neebles/proxy-server.sock");
+    if (!socket.waitForConnected(1200)) return QJsonObject{{"ok",false},{"error","socket_unavailable"}};
+    const QByteArray message=QJsonDocument(request).toJson(QJsonDocument::Compact)+"\n";
+    if (socket.write(message)!=message.size() || !socket.waitForBytesWritten(1200))
+        return QJsonObject{{"ok",false},{"error","write_timeout"}};
+    if (!socket.waitForReadyRead(3500)) return QJsonObject{{"ok",false},{"error","read_timeout"}};
+    QByteArray response=socket.readAll();
+    if (response.size()>8192) return QJsonObject{{"ok",false},{"error","oversize_response"}};
+    QJsonParseError error;
+    const QJsonDocument document=QJsonDocument::fromJson(response.trimmed(),&error);
+    if (error.error!=QJsonParseError::NoError || !document.isObject())
+        return QJsonObject{{"ok",false},{"error","invalid_response"}};
+    return document.object();
+}
+
 class AdminWindow final : public QMainWindow {
 public:
     explicit AdminWindow(QString policyPath) : path_(std::move(policyPath)) {
@@ -144,125 +164,53 @@ public:
     }
 private:
     void load() {
-        QFile f(path_);
-        if (!f.open(QIODevice::ReadOnly)) {
-            status_->setText("No se encontró la política. Se puede crear mediante Guardar lista.");
+        const QJsonObject answer=requestLocal(QJsonObject{{"op","policy.get"}});
+        if (!answer.value("ok").toBool()) {
+            status_->setText("Política no disponible: "+answer.value("error").toString());
             return;
         }
-        QJsonParseError error;
-        const auto doc = QJsonDocument::fromJson(f.readAll(), &error);
-        if (error.error != QJsonParseError::NoError || !doc.isObject() ||
-            doc.object().value("tailnet").toString() != StarkTailnet ||
-            !doc.object().value("allowed_clients").isArray()) {
-            status_->setText("Política inválida: no se cargaron direcciones.");
-            return;
-        }
-        QStringList lines;
-        for (const auto &value : doc.object().value("allowed_clients").toArray())
-            if (value.isString()) lines.append(value.toString());
-        clients_->setPlainText(lines.join('\n'));
-        status_->setText("Política cargada: " + path_);
+        const QJsonObject policy=answer.value("policy").toObject();
+        QStringList entries;
+        for (const auto &v:policy.value("allowed_clients").toArray())
+            if (v.isString()) entries.append(v.toString());
+        clients_->setPlainText(entries.join('\n'));
+        status_->setText("Política persistente cargada desde Health. Enforcement: NO CONFIGURADO.");
     }
     void refresh() {
-        // Read only the advisory snapshot published by host-side Health.
-        // This information is NEVER evidence of Exit Node authorization.
-        const QString snapshotPath = QDir::homePath()
-            + "/.config/neebles/proxy-server/tailscale-status.json";
-        QFile snapshot(snapshotPath);
-        if (!snapshot.open(QIODevice::ReadOnly)) {
-            tailnet_->setText("Esperando telemetría de Health");
+        const QJsonObject answer=requestLocal(QJsonObject{{"op","status"}});
+        if (!answer.value("ok").toBool()) {
+            tailnet_->setText("Health IPC no disponible");
             ip_->setText("No disponible");
             return;
         }
-
-        if (snapshot.size() > 8192) {
-            tailnet_->setText("Telemetría inválida");
-            ip_->setText("No disponible");
-            return;
-        }
-
-        QJsonParseError error;
-        const QJsonDocument document =
-            QJsonDocument::fromJson(snapshot.readAll(), &error);
-
-        if (error.error != QJsonParseError::NoError ||
-            !document.isObject()) {
-            tailnet_->setText("Respuesta inválida");
-            ip_->setText("No disponible");
-            return;
-        }
-
-        const QJsonObject data = document.object();
-        if (data.value("schema_version").toInt() != 1 ||
-            data.value("source").toString() !=
-                QStringLiteral("neebles-proxy-server-health") ||
-            !data.value("advisory_only").toBool()) {
-            tailnet_->setText("Origen de telemetría inválido");
-            ip_->setText("No disponible");
-            return;
-        }
-
-        const qint64 updated =
-            data.value("updated_at_ms").toVariant().toLongLong();
-        const qint64 age = QDateTime::currentMSecsSinceEpoch() - updated;
-        if (updated <= 0 || age < 0 || age > 15000) {
-            tailnet_->setText("Telemetría Tailscale caducada");
-            ip_->setText("No disponible");
-            return;
-        }
-
-        const QString tailnet = data.value("tailnet").toString();
-        const QString ip = data.value("tailscale_ipv4").toString();
-        const bool running = data.value("tailscale_ok").toBool();
-
-        QHostAddress address;
-        const bool validIpv4 = address.setAddress(ip)
-            && address.protocol() == QAbstractSocket::IPv4Protocol
-            && ip.startsWith("100.");
-
-        tailnet_->setText(running
-            ? tailnet + (tailnet == StarkTailnet
-                ? " (Stark)" : " (NO AUTORIZADA)")
-            : "Tailscale no disponible");
-
-        ip_->setText(running && validIpv4
-            ? ip : "No disponible");
+        const bool running=answer.value("tailscale_ok").toBool();
+        const QString tailnet=answer.value("tailnet").toString();
+        const QString ip=answer.value("tailscale_ipv4").toString();
+        tailnet_->setText(running ? tailnet+(tailnet==StarkTailnet ? " (Stark)" : " (NO AUTORIZADA)") : "Tailscale no disponible");
+        ip_->setText(running ? ip : "No disponible");
     }
     void save() {
-        QStringList entries;
+        QJsonArray allowed;
         QSet<QString> seen;
-        for (const QString &line : clients_->toPlainText().split('\n')) {
-            const QString address = line.trimmed();
+        for (const auto &line:clients_->toPlainText().split('\n')) {
+            const QString address=line.trimmed();
             if (address.isEmpty()) continue;
             QHostAddress parsed;
-            if (!parsed.setAddress(address) || parsed.protocol() != QAbstractSocket::IPv4Protocol ||
+            if (!parsed.setAddress(address) || parsed.protocol()!=QAbstractSocket::IPv4Protocol ||
                 !address.startsWith("100.") || seen.contains(address)) {
-                QMessageBox::warning(this, "Dirección inválida", "IPv4 Tailscale inválida o duplicada: " + address);
+                QMessageBox::warning(this,"Dirección inválida","IPv4 Tailscale inválida o duplicada: "+address);
                 return;
             }
-            seen.insert(address);
-            entries.append(address);
+            seen.insert(address); allowed.append(address);
         }
-        if (entries.isEmpty()) {
-            QMessageBox::warning(this, "Lista vacía", "Se requiere al menos un cliente autorizado.");
+        if (allowed.isEmpty()) { QMessageBox::warning(this,"Lista vacía","Se requiere al menos un cliente.");return; }
+        const QJsonObject policy{{"schema_version",1},{"tailnet",StarkTailnet},{"allowed_clients",allowed}};
+        const QJsonObject answer=requestLocal(QJsonObject{{"op","policy.set"},{"policy",policy}});
+        if (!answer.value("ok").toBool()) {
+            QMessageBox::critical(this,"Error", "Health no guardó la política: "+answer.value("error").toString());
             return;
         }
-        QJsonArray allowed;
-        for (const auto &entry : entries) allowed.append(entry);
-        const QJsonObject policy{{"schema_version", 1}, {"tailnet", StarkTailnet}, {"allowed_clients", allowed}};
-        const QFileInfo info(path_);
-        if (!QDir().mkpath(info.absolutePath())) {
-            QMessageBox::critical(this, "Error", "No se pudo crear el directorio de configuración.");
-            return;
-        }
-        QSaveFile target(path_);
-        if (!target.open(QIODevice::WriteOnly) ||
-            target.write(QJsonDocument(policy).toJson(QJsonDocument::Indented)) < 0 || !target.commit()) {
-            target.cancelWriting();
-            QMessageBox::critical(this, "Error", "No se pudo guardar la política. Verifique permisos y directorio.");
-            return;
-        }
-        status_->setText("Política guardada correctamente: " + path_ + ". Enforcement: NO CONFIGURADO.");
+        status_->setText("Política persistente guardada. Enforcement: NO CONFIGURADO.");
     }
     QString path_;
     QLabel *tailnet_ = nullptr;
