@@ -265,16 +265,13 @@ int main(int argc, char **argv) {
         return ok ? 0 : 3;
     }
     if (cli.isSet(ipcOnly)) return app.exec();
-    if (!ok) { QTextStream(stderr) << "Tailscale not ready for HTTP health; local IPC remains active\n"; return app.exec(); }
     bool parsed = false;
-    int number = cli.value(port).toInt(&parsed);
-    if (!parsed || number < 1024 || number > 65535) { QTextStream(stderr) << "Invalid port\n"; return 2; }
-    QTcpServer server;
-    const QHostAddress bind(ip);
-    if (!server.listen(bind, static_cast<quint16>(number))) {
-        QTextStream(stderr) << "Listen failed: " << server.errorString() << '\n'; return 4;
+    const int number = cli.value(port).toInt(&parsed);
+    if (!parsed || number < 1024 || number > 65535) {
+        QTextStream(stderr) << "Invalid port\n";
+        return 2;
     }
-    QTextStream(stdout) << "HEALTH_LISTEN=" << ip << ':' << number << '\n';
+    QTcpServer server;
     QObject::connect(&server, &QTcpServer::newConnection, &app, [&server]() {
         while (server.hasPendingConnections()) {
             QTcpSocket *socket = server.nextPendingConnection();
@@ -293,11 +290,39 @@ int main(int argc, char **argv) {
             QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
         }
     });
-    // Refresh advisory telemetry independently of UI sessions.
+    // Reconcile the listener repeatedly: the user service can start before tailscaled.
+    // Never publish an HTTP listener on an unverified/wrong tailnet.
+    QString listeningIp;
+    auto reconcileHealth = [&server, &listeningIp, number]() {
+        QJsonObject status;
+        const bool ready = getStatus(status) && stark(status);
+        const QString currentIp = ready ? serverIp(status) : QString();
+        if (currentIp.isEmpty()) {
+            if (server.isListening()) {
+                server.close();
+                listeningIp.clear();
+                QTextStream(stdout) << "HEALTH_LISTENER_CLOSED=TAILSCALE_NOT_READY\n";
+            }
+            return;
+        }
+        if (server.isListening() && currentIp == listeningIp) return;
+        if (server.isListening()) server.close();
+        listeningIp.clear();
+        if (!server.listen(QHostAddress(currentIp), static_cast<quint16>(number))) {
+            QTextStream(stderr) << "HEALTH_LISTEN_RETRY=" << currentIp << ':' << number
+                                << " error=" << server.errorString() << '\n';
+            return;
+        }
+        listeningIp = currentIp;
+        QTextStream(stdout) << "HEALTH_LISTEN=" << currentIp << ':' << number << '\n';
+    };
+    reconcileHealth();
     publishUiSnapshot();
-    QTimer snapshotTimer;
-    QObject::connect(&snapshotTimer, &QTimer::timeout,
-                     &app, [] { publishUiSnapshot(); });
-    snapshotTimer.start(5000);
+    QTimer heartbeat;
+    QObject::connect(&heartbeat, &QTimer::timeout, &app, [&]() {
+        reconcileHealth();
+        publishUiSnapshot();
+    });
+    heartbeat.start(5000);
     return app.exec();
 }
