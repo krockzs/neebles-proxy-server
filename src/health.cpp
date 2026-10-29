@@ -1,4 +1,9 @@
 #include <QCoreApplication>
+#include <QDateTime>
+#include <QTimer>
+#include <QSaveFile>
+#include <QFileInfo>
+#include <QDir>
 #include <QCommandLineParser>
 #include <QFile>
 #include <QHostAddress>
@@ -51,6 +56,57 @@ static QJsonObject reply(bool ok, const QString &ip) {
         {"exit_ready", false}, {"authorization_enforced", false},
         {"detail", "Exit-node traffic remains disabled until authorization and approval are verified."}};
 }
+
+// Advisory UI telemetry only. Never use this file to authorize routing.
+static void publishUiSnapshot() {
+    QJsonObject status;
+    const bool available = getStatus(status);
+    const QString ip = available ? serverIp(status) : QString();
+    const bool running = available
+        && status.value("BackendState").toString() == "Running";
+    const QString tailnet = available
+        ? status.value("CurrentTailnet").toObject()
+            .value("Name").toString()
+        : QString();
+
+    QJsonObject snapshot{
+        {"schema_version", 1},
+        {"source", "neebles-proxy-server-health"},
+        {"tailscale_ok", running && !ip.isEmpty()},
+        {"backend_state", running ? "Running" : "Unavailable"},
+        {"tailnet", tailnet},
+        {"tailscale_ipv4", ip},
+        {"advisory_only", true}
+    };
+
+    snapshot.insert("updated_at_ms",
+        QDateTime::currentMSecsSinceEpoch());
+
+    const QString directory = QDir::homePath()
+        + "/.config/neebles/proxy-server";
+    if (!QDir().mkpath(directory))
+        return;
+
+    QFile::setPermissions(directory,
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+        QFileDevice::ExeOwner);
+
+    QSaveFile file(directory + "/tailscale-status.json");
+    if (!file.open(QIODevice::WriteOnly))
+        return;
+
+    const QByteArray json =
+        QJsonDocument(snapshot).toJson(QJsonDocument::Compact);
+    if (file.write(json) != json.size()) {
+        file.cancelWriting();
+        return;
+    }
+    if (file.commit()) {
+        QFile::setPermissions(directory + "/tailscale-status.json",
+            QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    }
+}
+
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
     QCommandLineParser cli;
@@ -109,5 +165,11 @@ int main(int argc, char **argv) {
             QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
         }
     });
+    // Refresh advisory telemetry independently of UI sessions.
+    publishUiSnapshot();
+    QTimer snapshotTimer;
+    QObject::connect(&snapshotTimer, &QTimer::timeout,
+                     &app, [] { publishUiSnapshot(); });
+    snapshotTimer.start(5000);
     return app.exec();
 }

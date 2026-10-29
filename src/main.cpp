@@ -1,5 +1,14 @@
 #include "vault_install.h"
 #include <QApplication>
+#include <QColor>
+#include <QPainter>
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QStyleFactory>
+#include <QTimer>
+#include <QSplashScreen>
+#include <QPixmap>
+#include <QIcon>
 #include <QDir>
 #include <QFileInfo>
 #include <QStringList>
@@ -22,6 +31,77 @@
 #include <QSet>
 #include <QVBoxLayout>
 #include <QWidget>
+
+
+static QString neeblesTheme() {
+    return QStringLiteral(R"QSS(
+        QWidget {
+            background-color: #10131d;
+            color: #e7edf8;
+            font-family: "Noto Sans", sans-serif;
+            font-size: 12px;
+        }
+        QMainWindow { background-color: #10131d; }
+        QGroupBox {
+            background-color: #191d2c;
+            border: 1px solid #313a55;
+            border-radius: 9px;
+            margin-top: 12px;
+            padding: 14px;
+            font-weight: 600;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 12px;
+            padding: 0 6px;
+            color: #65ddeb;
+        }
+        QPlainTextEdit {
+            background-color: #131827;
+            color: #edf5ff;
+            border: 1px solid #39435e;
+            border-radius: 8px;
+            padding: 9px;
+            selection-background-color: #7355c6;
+        }
+        QPlainTextEdit:focus {
+            border-color: #4fc9de;
+        }
+        QPushButton {
+            background-color: #252c42;
+            color: #eaf4ff;
+            border: 1px solid #465377;
+            border-radius: 7px;
+            padding: 9px 16px;
+            font-weight: 600;
+        }
+        QPushButton:hover {
+            background-color: #30415c;
+            border-color: #50d4e8;
+        }
+        QPushButton:pressed {
+            background-color: #453a76;
+        }
+        QPushButton:disabled {
+            color: #777f92;
+            background-color: #202330;
+        }
+        QLabel { background: transparent; }
+        QMessageBox {
+            background-color: #171c2a;
+            color: #e7edf8;
+        }
+        QScrollBar:vertical {
+            background: #151928;
+            width: 11px;
+        }
+        QScrollBar::handle:vertical {
+            background: #45516c;
+            border-radius: 4px;
+            min-height: 24px;
+        }
+    )QSS");
+}
 
 static constexpr auto StarkTailnet = "olate.pablo@gmail.com";
 
@@ -84,28 +164,69 @@ private:
         status_->setText("Política cargada: " + path_);
     }
     void refresh() {
-        QProcess proc;
-        proc.start("/usr/bin/tailscale", {"status", "--json"});
-        if (!proc.waitForStarted(2000) || !proc.waitForFinished(5000) ||
-            proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
-            if (proc.state() != QProcess::NotRunning) { proc.kill(); proc.waitForFinished(500); }
-            tailnet_->setText("Tailscale no disponible");
+        // Read only the advisory snapshot published by host-side Health.
+        // This information is NEVER evidence of Exit Node authorization.
+        const QString snapshotPath = QDir::homePath()
+            + "/.config/neebles/proxy-server/tailscale-status.json";
+        QFile snapshot(snapshotPath);
+        if (!snapshot.open(QIODevice::ReadOnly)) {
+            tailnet_->setText("Esperando telemetría de Health");
             ip_->setText("No disponible");
             return;
         }
-        QJsonParseError error;
-        auto doc = QJsonDocument::fromJson(proc.readAllStandardOutput(), &error);
-        if (error.error != QJsonParseError::NoError || !doc.isObject()) {
-            tailnet_->setText("Respuesta inválida");
+
+        if (snapshot.size() > 8192) {
+            tailnet_->setText("Telemetría inválida");
+            ip_->setText("No disponible");
             return;
         }
-        const auto obj = doc.object();
-        const QString tailnet = obj.value("CurrentTailnet").toObject().value("Name").toString();
-        tailnet_->setText(tailnet + (tailnet == StarkTailnet ? " (Stark)" : " (NO AUTORIZADA)"));
-        QStringList addresses;
-        for (const auto &v : obj.value("Self").toObject().value("TailscaleIPs").toArray())
-            if (v.toString().contains('.')) addresses.append(v.toString());
-        ip_->setText(addresses.join(", "));
+
+        QJsonParseError error;
+        const QJsonDocument document =
+            QJsonDocument::fromJson(snapshot.readAll(), &error);
+
+        if (error.error != QJsonParseError::NoError ||
+            !document.isObject()) {
+            tailnet_->setText("Respuesta inválida");
+            ip_->setText("No disponible");
+            return;
+        }
+
+        const QJsonObject data = document.object();
+        if (data.value("schema_version").toInt() != 1 ||
+            data.value("source").toString() !=
+                QStringLiteral("neebles-proxy-server-health") ||
+            !data.value("advisory_only").toBool()) {
+            tailnet_->setText("Origen de telemetría inválido");
+            ip_->setText("No disponible");
+            return;
+        }
+
+        const qint64 updated =
+            data.value("updated_at_ms").toVariant().toLongLong();
+        const qint64 age = QDateTime::currentMSecsSinceEpoch() - updated;
+        if (updated <= 0 || age < 0 || age > 15000) {
+            tailnet_->setText("Telemetría Tailscale caducada");
+            ip_->setText("No disponible");
+            return;
+        }
+
+        const QString tailnet = data.value("tailnet").toString();
+        const QString ip = data.value("tailscale_ipv4").toString();
+        const bool running = data.value("tailscale_ok").toBool();
+
+        QHostAddress address;
+        const bool validIpv4 = address.setAddress(ip)
+            && address.protocol() == QAbstractSocket::IPv4Protocol
+            && ip.startsWith("100.");
+
+        tailnet_->setText(running
+            ? tailnet + (tailnet == StarkTailnet
+                ? " (Stark)" : " (NO AUTORIZADA)")
+            : "Tailscale no disponible");
+
+        ip_->setText(running && validIpv4
+            ? ip : "No disponible");
     }
     void save() {
         QStringList entries;
@@ -185,7 +306,58 @@ int main(int argc, char **argv) {
     const QString path = cli.value("policy").isEmpty()
         ? QDir::homePath() + "/.config/neebles/proxy-server/allowlist.json"
         : cli.value("policy");
-    AdminWindow window(path);
-    window.show();
+
+    // NEEBLES standard dark theme.
+    QApplication::setStyle(QStyleFactory::create("Fusion"));
+    app.setStyleSheet(neeblesTheme());
+
+    // Canonical assets, relative to the installed runtime executable.
+    const QDir moduleRoot(
+        QDir(QCoreApplication::applicationDirPath()).absoluteFilePath("..")
+    );
+
+    const QString iconPath =
+        moduleRoot.absoluteFilePath("icon.png");
+
+    const QString splashPath =
+        moduleRoot.absoluteFilePath("assets/neebles-server-logo.png");
+
+    const QPixmap moduleIcon(iconPath);
+    const QPixmap splashLogo(splashPath);
+
+    if (!moduleIcon.isNull())
+        app.setWindowIcon(QIcon(moduleIcon));
+
+    // Distinct splash artwork; do not reuse the small module icon.
+    QPixmap splashCanvas(700, 420);
+    splashCanvas.fill(QColor("#10131d"));
+
+    if (!splashLogo.isNull()) {
+        QPainter painter(&splashCanvas);
+        const QPixmap scaled = splashLogo.scaled(
+            splashCanvas.size(),
+            Qt::KeepAspectRatio,
+            Qt::SmoothTransformation
+        );
+        painter.drawPixmap(
+            (splashCanvas.width() - scaled.width()) / 2,
+            (splashCanvas.height() - scaled.height()) / 2,
+            scaled
+        );
+    }
+
+    auto *splash = new QSplashScreen(splashCanvas);
+    splash->show();
+
+    // The administration window is shown after the 3-second splash.
+    QTimer::singleShot(3000, &app, [&app, splash, path] {
+        auto *window = new AdminWindow(path);
+        window->setAttribute(Qt::WA_DeleteOnClose);
+        window->setWindowIcon(app.windowIcon());
+        window->show();
+        splash->finish(window);
+        splash->deleteLater();
+    });
+
     return app.exec();
 }
